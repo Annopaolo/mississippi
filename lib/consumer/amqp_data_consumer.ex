@@ -130,6 +130,11 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     if queue_index in queue_range do
       {:reply, {:ok, get_queue_via_tuple(queue_index)}, state}
     else
+      _ =
+        Logger.warning(
+          "Trying to handle message sharded by #{inspect(sharding_key)}, resulting index #{queue_index} but range #{inspect(queue_range)}"
+        )
+
       {:reply, {:error, :unhandled_device}, state}
     end
   end
