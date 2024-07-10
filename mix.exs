@@ -6,6 +6,7 @@ defmodule Mississippi.MixProject do
       app: :mississippi,
       version: "0.1.0",
       elixir: "~> 1.15",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps()
     ]
@@ -18,6 +19,9 @@ defmodule Mississippi.MixProject do
     ]
   end
 
+  defp elixirc_paths(:test), do: ["test/support", "lib"]
+  defp elixirc_paths(_), do: ["lib"]
+
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
@@ -28,6 +32,7 @@ defmodule Mississippi.MixProject do
       # hex.pm package and esl/ex_rabbit_pool do not support amqp version 2.1.
       # This fork is supporting amqp ~> 2.0 and also ~> 3.0.
       {:ex_rabbit_pool, github: "leductam/ex_rabbit_pool"},
+      {:hammox, "~> 0.7", only: :test},
       {:nimble_options, "~> 1.0"},
       {:pretty_log, "~> 0.1"},
       {:typed_struct, "~> 0.3.0"}
