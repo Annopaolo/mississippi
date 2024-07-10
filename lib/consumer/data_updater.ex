@@ -14,6 +14,7 @@ defmodule Mississippi.Consumer.DataUpdater do
   alias Mississippi.Consumer.DataUpdater.State
   alias Mississippi.Consumer.Message
   require Logger
+  use Efx
 
   # TODO make this configurable?
   @data_updater_deactivation_interval_ms :timer.hours(3)
@@ -23,7 +24,8 @@ defmodule Mississippi.Consumer.DataUpdater do
   (which is a module implementing DataUpdater.Handler behaviour).
   You can get the DataUpdater instance for a given sharding_key using `get_data_updater_process/1`.
   """
-  def handle_message(data_updater_pid, %Message{} = message) do
+  @spec handle_message(pid(), Message.t()) :: :ok
+  defeffect handle_message(data_updater_pid, %Message{} = message) do
     GenServer.cast(data_updater_pid, {:handle_message, message})
   end
 
@@ -32,7 +34,8 @@ defmodule Mississippi.Consumer.DataUpdater do
   Used to change the state of a stateful Handler. The call is blocking and there is no ordering guarantee.
   You can get the DataUpdater instance for a given sharding_key using `get_data_updater_process/1`.
   """
-  def handle_signal(data_updater_pid, signal) do
+  @spec handle_signal(pid(), term()) :: term()
+  defeffect handle_signal(data_updater_pid, signal) do
     GenServer.call(data_updater_pid, {:handle_signal, signal})
   end
 
@@ -42,7 +45,7 @@ defmodule Mississippi.Consumer.DataUpdater do
   """
   @spec get_data_updater_process(sharding_key :: term()) ::
           {:ok, pid()} | {:error, :data_updater_start_fail}
-  def get_data_updater_process(sharding_key) do
+  defeffect get_data_updater_process(sharding_key) do
     # TODO bring back :offload_start (?)
     case DataUpdater.Supervisor.start_child({DataUpdater, sharding_key: sharding_key}) do
       {:ok, pid} ->

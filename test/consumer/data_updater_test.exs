@@ -7,10 +7,7 @@ defmodule Mississippi.Consumer.DataUpdater.Test do
   setup_all do
     start_supervised!({Registry, [keys: :unique, name: Registry.DataUpdater]})
 
-    start_supervised!(
-      {Mississippi.Consumer.DataUpdater.Supervisor,
-       message_handler: Mississippi.Consumer.DataUpdater.Handler.Impl}
-    )
+    start_supervised!({DataUpdater.Supervisor, message_handler: DataUpdater.Handler.Impl})
 
     :ok
   end
