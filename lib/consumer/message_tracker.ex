@@ -7,7 +7,6 @@ defmodule Mississippi.Consumer.MessageTracker do
   In order to maintain the strong ordering guarantee, it is possible that in some corner cases
   a message gets processed twice, but after all with strange aeons, even death may die.
   """
-  use Efx
 
   alias Mississippi.Consumer.MessageTracker
   alias Mississippi.Consumer.Message
@@ -61,7 +60,7 @@ defmodule Mississippi.Consumer.MessageTracker do
   This call is blocking, as only first in-order message can be acked.
   """
   @spec ack_delivery(pid(), Message.t()) :: term()
-  defeffect ack_delivery(message_tracker, %Message{} = message) do
+  def ack_delivery(message_tracker, %Message{} = message) do
     GenServer.call(message_tracker, {:ack_delivery, message})
   end
 
@@ -69,6 +68,7 @@ defmodule Mississippi.Consumer.MessageTracker do
   Signals to the MessageTracker process to reject the message.
   This call is blocking, as only first in-order message can be rejected.
   """
+  @spec reject(pid(), Message.t()) :: term()
   def reject(message_tracker, %Message{} = message) do
     GenServer.call(message_tracker, {:reject, message})
   end
