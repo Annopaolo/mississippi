@@ -9,7 +9,7 @@ defmodule Mississippi.Consumer.MessageTracker.Server do
   alias Mississippi.Consumer.Message
   alias Mississippi.Consumer.MessageTracker.Server.State
 
-  @adapter ExRabbitPool.RabbitMQ
+  @adapter if Mix.env() != :test, do: ExRabbitPool.RabbitMQ, else: MockRabbitMQ
   # TODO make this configurable? (Same as DataUpdater)
   @message_tracker_deactivation_interval_ms :timer.hours(3)
 
