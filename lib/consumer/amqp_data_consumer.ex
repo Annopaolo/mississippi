@@ -4,7 +4,6 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
   use GenServer
 
   alias AMQP.Channel
-  alias Mississippi.Consumer.DataUpdater
   alias Mississippi.Consumer.AMQPDataConsumer.State
   alias Mississippi.Consumer.MessageTracker
 

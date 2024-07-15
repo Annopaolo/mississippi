@@ -1,63 +1,58 @@
 defmodule Mississippi.Consumer.DataUpdater do
-  defmodule State do
-    defstruct [
-      :sharding_key,
-      :message_tracker,
-      :message_handler,
-      :handler_state
-    ]
-  end
+  @moduledoc """
+  The DataUpdater process takes care of handling messages and signals for a given sharding key.
+  Messages are handled using the `message_handler` providedin the Mississippi config,
+  which is a module implementing DataUpdater.Handler behaviour.
+  Note that the DataUpdater process has no concept of message ordering, as it is the
+  MessageTracker process that takes care of maitaining the order of messages.
+  """
 
-  use GenServer
+  use GenServer, restart: :transient
 
   alias Mississippi.Consumer.MessageTracker
   alias Mississippi.Consumer.DataUpdater
+  alias Mississippi.Consumer.DataUpdater.State
+  alias Mississippi.Consumer.Message
   require Logger
 
   # TODO make this configurable?
-  @data_updater_deactivation_interval_ms 60 * 60 * 1_000 * 3
+  @data_updater_deactivation_interval_ms :timer.hours(3)
 
   @doc """
-  Start handling a message. If it is the first in-order message, it will be processed
-  straight away by the `message_handler` provided in the mississippi config
+  Handle a message using the `message_handler` provided in the Mississippi config
   (which is a module implementing DataUpdater.Handler behaviour).
-  If not, the message will remain in memory until it can be processed, i.e. it is now the first
-  in-order message.
+  You can get the DataUpdater instance for a given sharding_key using `get_data_updater_process/1`.
   """
-  def handle_message(sharding_key, payload, headers, tracking_id, timestamp) do
-    message_tracker = get_message_tracker(sharding_key)
-    {message_id, delivery_tag} = tracking_id
-    MessageTracker.track_delivery(message_tracker, message_id, delivery_tag)
-
-    get_data_updater_process(sharding_key)
-    |> GenServer.cast({:handle_message, payload, headers, message_id, timestamp})
+  def handle_message(data_updater_pid, %Message{} = message) do
+    GenServer.cast(data_updater_pid, {:handle_message, message})
   end
 
   @doc """
-  Handles an information that must be forwarded to an Handler process,
-  but is not a Mississippi message. Used to change the state of
-  a stateful Handler. The call is blocking and there is no ordering guarantee.
+  Handles an information that must be forwarded to a `message_handler` but is not a Mississippi message.
+  Used to change the state of a stateful Handler. The call is blocking and there is no ordering guarantee.
+  You can get the DataUpdater instance for a given sharding_key using `get_data_updater_process/1`.
   """
-  def handle_signal(sharding_key, signal) do
-    get_data_updater_process(sharding_key)
-    |> GenServer.call({:handle_signal, signal})
+  def handle_signal(data_updater_pid, signal) do
+    GenServer.call(data_updater_pid, {:handle_signal, signal})
   end
 
   @doc """
   Provides a reference to the DataUpdater process that will handle the set of messages identified by
   the given sharding key.
   """
+  @spec get_data_updater_process(sharding_key :: term()) ::
+          {:ok, pid()} | {:error, :data_updater_start_fail}
   def get_data_updater_process(sharding_key) do
     # TODO bring back :offload_start (?)
     case DataUpdater.Supervisor.start_child({DataUpdater, sharding_key: sharding_key}) do
       {:ok, pid} ->
-        pid
+        {:ok, pid}
 
       {:ok, pid, _info} ->
-        pid
+        {:ok, pid}
 
       {:error, {:already_started, pid}} ->
-        pid
+        {:ok, pid}
 
       other ->
         _ =
