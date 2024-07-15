@@ -6,6 +6,7 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
   alias AMQP.Channel
   alias Mississippi.Consumer.DataUpdater
   alias Mississippi.Consumer.AMQPDataConsumer.State
+  alias Mississippi.Consumer.MessageTracker
 
   # TODO should this be customizable?
   @reconnect_interval 1_000
@@ -52,60 +53,17 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     {:reply, res, state}
   end
 
-  # TODO this was (seemed to be) unused
-  def handle_call({:start_message_tracker, sharding_key}, _from, state) do
-    res = DataUpdater.get_message_tracker(sharding_key)
-    {:reply, res, state}
-  end
-
-  # TODO this was (seemed to be) unused
-  def handle_call({:start_data_updater, sharding_key, _message_tracker}, _from, state) do
-    res = DataUpdater.get_data_updater_process(sharding_key)
-    {:reply, res, state}
-  end
-
-  def handle_call({:fetch_queue_via_tuple, sharding_key}, _from, state) do
-    %State{
-      queue_total_count: queue_count,
-      queue_range: queue_range
-    } = state
-
-    # TODO refactor: bring out the algorithm
-    # This is the same sharding algorithm used in producer
-    # Make sure they stay in sync
-    queue_index = :erlang.phash2(sharding_key, queue_count)
-
-    if queue_index in queue_range do
-      {:reply, {:ok, get_queue_via_tuple(queue_index)}, state}
-    else
-      {:reply, {:error, :unhandled_device}, state}
-    end
-  end
-
   @impl true
   def handle_info(:init_consume, state), do: init_consume(state)
 
+  # This is a Message Tracker deactivating itself normally, do nothing.
+  # In case a messageTracker crashes, we want to crash too, so that messages are requeued.
   def handle_info(
         {:DOWN, _, :process, pid, :normal},
         %State{channel: %Channel{pid: chan_pid}} = state
       )
       when pid != chan_pid do
-    # This is a Message Tracker deactivating itself normally, do nothing
     {:noreply, state}
-  end
-
-  # Make sure to handle monitored message trackers exit messages
-  # Under the hood DataUpdater calls Process.monitor so those monitor are leaked into this process.
-  def handle_info(
-        {:DOWN, monitor, :process, chan_pid, reason},
-        %{monitor: monitor, channel: %{pid: chan_pid}} = state
-      ) do
-    # Channel went down, stop the process
-    Logger.warning("AMQP data consumer crashed, reason: #{inspect(reason)}",
-      tag: "data_consumer_chan_crash"
-    )
-
-    init_consume(%State{state | channel: nil, monitor: nil})
   end
 
   # Confirmation sent by the broker after registering this process as a consumer
@@ -191,28 +149,26 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
         # Something went wrong, let's put the channel back where it belongs
         _ = ExRabbitPool.checkin_channel(conn, channel)
         schedule_connect()
-        {:noreply, %{state | channel: nil, monitor: nil}}
+        {:noreply, %{state | channel: nil}}
     end
   end
 
-  defp handle_consume(payload, headers, timestamp, meta) do
-    with %{@sharding_key => sharding_key_binary} <- headers,
-         {:ok, tracking_id} <- get_tracking_id(meta) do
+  defp handle_consume(%Message{} = message, %Channel{} = channel) do
+    with %{@sharding_key => sharding_key_binary} <- message.headers do
       sharding_key = :erlang.binary_to_term(sharding_key_binary)
-      # This call might spawn processes and implicitly monitor them
-      DataUpdater.handle_message(
-        sharding_key,
-        payload,
-        headers,
-        tracking_id,
-        timestamp
-      )
+
+      {:ok, pid} = MessageTracker.get_message_tracker(sharding_key)
+
+      MessageTracker.handle_message(pid, message, channel)
     else
-      _ -> handle_invalid_msg(payload, headers, timestamp, meta)
+      _ -> handle_invalid_msg(message)
     end
   end
 
-  defp handle_invalid_msg(payload, headers, timestamp, meta) do
+  defp handle_invalid_msg(message) do
+    %Message{payload: payload, headers: headers, timestamp: timestamp, meta: meta} =
+      message
+
     Logger.warning(
       "Invalid AMQP message: #{inspect(Base.encode64(payload))} #{inspect(headers)} #{inspect(timestamp)} #{inspect(meta)}",
       tag: "data_consumer_invalid_msg"
