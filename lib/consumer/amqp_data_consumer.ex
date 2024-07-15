@@ -1,19 +1,11 @@
 defmodule Mississippi.Consumer.AMQPDataConsumer do
-  defmodule State do
-    defstruct [
-      :channel,
-      :monitor,
-      :queue_name,
-      :queue_range,
-      :queue_total_count
-    ]
-  end
 
   require Logger
   use GenServer
 
   alias AMQP.Channel
   alias Mississippi.Consumer.DataUpdater
+  alias Mississippi.Consumer.AMQPDataConsumer.State
 
   # TODO should this be customizable?
   @reconnect_interval 1_000
@@ -28,54 +20,14 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     GenServer.start_link(__MODULE__, args, name: get_queue_via_tuple(index))
   end
 
-  def ack(pid, delivery_tag) do
-    Logger.debug("Going to ack #{inspect(delivery_tag)}")
-    GenServer.call(pid, {:ack, delivery_tag})
-  end
-
-  def discard(pid, delivery_tag) do
-    Logger.debug("Going to discard #{inspect(delivery_tag)}")
-    GenServer.call(pid, {:discard, delivery_tag})
-  end
-
-  def requeue(pid, delivery_tag) do
-    Logger.debug("Going to requeue #{inspect(delivery_tag)}")
-    GenServer.call(pid, {:requeue, delivery_tag})
-  end
-
-  def start_message_tracker(sharding_key) do
-    with {:ok, via_tuple} <- fetch_queue_via_tuple(sharding_key) do
-      GenServer.call(via_tuple, {:start_message_tracker, sharding_key})
-    end
-  end
-
-  def start_data_updater(sharding_key, message_tracker) do
-    with {:ok, via_tuple} <- fetch_queue_via_tuple(sharding_key) do
-      GenServer.call(via_tuple, {:start_data_updater, sharding_key, message_tracker})
-    end
-  end
-
-  defp get_queue_via_tuple(queue_index) when is_integer(queue_index) do
-    {:via, Registry, {Registry.AMQPDataConsumer, {:queue_index, queue_index}}}
-  end
-
-  defp fetch_queue_via_tuple(sharding_key) do
-    GenServer.call(self(), {:fetch_queue_via_tuple, sharding_key})
-  end
-
   # Server callbacks
 
   @impl true
   def init(args) do
     queue_name = Keyword.fetch!(args, :queue_name)
-    queue_range_start = Keyword.fetch!(args, :range_start)
-    queue_range_end = Keyword.fetch!(args, :range_end)
-    queue_count = Keyword.fetch!(args, :queue_total_count)
 
     state = %State{
-      queue_name: queue_name,
-      queue_range: queue_range_start..queue_range_end,
-      queue_total_count: queue_count
+      queue_name: queue_name
     }
 
     {:ok, state, {:continue, :init_consume}}
