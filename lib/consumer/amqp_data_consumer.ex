@@ -1,10 +1,15 @@
 defmodule Mississippi.Consumer.AMQPDataConsumer do
+  @moduledoc """
+  The AMQPDataConsumer process fetches messages from a Mississippi AMQP queue and
+  sends them to MessageTrackers according to the message sharding key.
+  """
 
   require Logger
   use GenServer
 
   alias AMQP.Channel
   alias Mississippi.Consumer.AMQPDataConsumer.State
+  alias Mississippi.Consumer.Message
   alias Mississippi.Consumer.MessageTracker
 
   # TODO should this be customizable?
@@ -42,7 +47,7 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     {:reply, res, state}
   end
 
-  def handle_call({:discard, delivery_tag}, _from, %State{channel: chan} = state) do
+  def handle_call({:reject, delivery_tag}, _from, %State{channel: chan} = state) do
     res = @adapter.reject(chan, delivery_tag, requeue: false)
     {:reply, res, state}
   end
@@ -88,7 +93,14 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
 
     {timestamp, clean_meta} = Map.pop(no_headers_meta, :timestamp)
 
-    case handle_consume(payload, headers_map, timestamp, clean_meta) do
+    message = %Message{
+      payload: payload,
+      headers: headers_map,
+      timestamp: timestamp,
+      meta: clean_meta
+    }
+
+    case handle_consume(message, chan) do
       :ok ->
         :ok
 
@@ -98,6 +110,10 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     end
 
     {:noreply, state}
+  end
+
+  defp get_queue_via_tuple(queue_index) when is_integer(queue_index) do
+    {:via, Registry, {Registry.AMQPDataConsumer, {:queue_index, queue_index}}}
   end
 
   defp schedule_connect() do
@@ -130,14 +146,14 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     with :ok <- @adapter.qos(channel, prefetch_count: @consumer_prefetch_count),
          {:ok, _queue} <- @adapter.declare_queue(channel, queue_name, durable: true),
          {:ok, _consumer_tag} <- @adapter.consume(channel, queue_name, self()) do
-      ref = Process.monitor(channel_pid)
+      Process.link(channel_pid)
 
       _ =
         Logger.debug("AMQPDataConsumer for queue #{queue_name} initialized",
           tag: "data_consumer_init_ok"
         )
 
-      {:noreply, %State{state | channel: channel, monitor: ref}}
+      {:noreply, %State{state | channel: channel}}
     else
       {:error, reason} ->
         Logger.warning(
@@ -180,16 +196,5 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     Enum.reduce(headers, %{}, fn {key, _type, value}, acc ->
       Map.put(acc, key, value)
     end)
-  end
-
-  defp get_tracking_id(meta) do
-    message_id = meta.message_id
-    delivery_tag = meta.delivery_tag
-
-    if is_binary(message_id) and is_integer(delivery_tag) do
-      {:ok, {meta.message_id, meta.delivery_tag}}
-    else
-      {:error, :invalid_message_metadata}
-    end
   end
 end
