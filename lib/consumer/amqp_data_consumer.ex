@@ -32,7 +32,8 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     queue_name = Keyword.fetch!(args, :queue_name)
 
     state = %State{
-      queue_name: queue_name
+      queue_name: queue_name,
+      monitors: []
     }
 
     {:ok, state, {:continue, :init_consume}}
@@ -42,32 +43,18 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
   def handle_continue(:init_consume, state), do: init_consume(state)
 
   @impl true
-  def handle_call({:ack, delivery_tag}, _from, %State{channel: chan} = state) do
-    res = @adapter.ack(chan, delivery_tag)
-    {:reply, res, state}
-  end
-
-  def handle_call({:reject, delivery_tag}, _from, %State{channel: chan} = state) do
-    res = @adapter.reject(chan, delivery_tag, requeue: false)
-    {:reply, res, state}
-  end
-
-  def handle_call({:requeue, delivery_tag}, _from, %State{channel: chan} = state) do
-    res = @adapter.reject(chan, delivery_tag, requeue: true)
-    {:reply, res, state}
-  end
-
-  @impl true
   def handle_info(:init_consume, state), do: init_consume(state)
 
-  # This is a Message Tracker deactivating itself normally, do nothing.
+  # This is a Message Tracker deactivating itself normally, just remove its monitor.
   # In case a messageTracker crashes, we want to crash too, so that messages are requeued.
   def handle_info(
         {:DOWN, _, :process, pid, :normal},
         %State{channel: %Channel{pid: chan_pid}} = state
       )
       when pid != chan_pid do
-    {:noreply, state}
+    %State{monitors: monitors} = state
+    new_monitors = List.delete(monitors, pid)
+    {:noreply, %State{state | monitors: new_monitors}}
   end
 
   # Confirmation sent by the broker after registering this process as a consumer
@@ -87,7 +74,7 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
 
   # Message consumed
   def handle_info({:basic_deliver, payload, meta}, state) do
-    %State{channel: chan} = state
+    %State{channel: channel, monitors: monitors} = state
     {headers, no_headers_meta} = Map.pop(meta, :headers, [])
     headers_map = amqp_headers_to_map(headers)
 
@@ -100,16 +87,31 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
       meta: clean_meta
     }
 
-    case handle_consume(message, chan) do
-      :ok ->
-        :ok
+    case message.headers do
+      %{@sharding_key => sharding_key_binary} ->
+        sharding_key = :erlang.binary_to_term(sharding_key_binary)
+        {:ok, mt_pid} = MessageTracker.get_message_tracker(sharding_key)
 
-      :invalid_msg ->
+        new_monitors = maybe_update_monitors(mt_pid, monitors)
+
+        MessageTracker.handle_message(mt_pid, message, channel)
+        %State{state | monitors: new_monitors}
+
+      _ ->
+        handle_invalid_msg(message)
         # ACK invalid msg to discard them
-        @adapter.ack(chan, meta.delivery_tag)
+        @adapter.ack(channel, meta.delivery_tag)
+        {:noreply, state}
     end
+  end
 
-    {:noreply, state}
+  defp maybe_update_monitors(pid, monitors) do
+    if pid in monitors do
+      monitors
+    else
+      Process.monitor(pid)
+      [pid | monitors]
+    end
   end
 
   defp get_queue_via_tuple(queue_index) when is_integer(queue_index) do
@@ -165,18 +167,6 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
         _ = ExRabbitPool.checkin_channel(conn, channel)
         schedule_connect()
         {:noreply, %{state | channel: nil}}
-    end
-  end
-
-  defp handle_consume(%Message{} = message, %Channel{} = channel) do
-    with %{@sharding_key => sharding_key_binary} <- message.headers do
-      sharding_key = :erlang.binary_to_term(sharding_key_binary)
-
-      {:ok, pid} = MessageTracker.get_message_tracker(sharding_key)
-
-      MessageTracker.handle_message(pid, message, channel)
-    else
-      _ -> handle_invalid_msg(message)
     end
   end
 
