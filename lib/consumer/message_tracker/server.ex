@@ -5,8 +5,8 @@ defmodule Mississippi.Consumer.MessageTracker.Server do
 
   use GenServer, restart: :transient
   require Logger
-  alias Mississippi.Consumer.DataUpdater
   alias Mississippi.Consumer.Message
+  alias Mississippi.Consumer.MessageTracker.Server.Effects
   alias Mississippi.Consumer.MessageTracker.Server.State
 
   @adapter if Mix.env() != :test, do: ExRabbitPool.RabbitMQ, else: MockRabbitMQ
@@ -40,7 +40,7 @@ defmodule Mississippi.Consumer.MessageTracker.Server do
     new_state =
       if old_channel == nil or new_channel != old_channel do
         # If the channel is different, it means the old channel crashed. Update the reference.
-        Process.monitor(new_channel.pid)
+        Effects.monitor_channel(new_channel)
         %State{state | channel: new_channel}
       else
         state
@@ -57,7 +57,7 @@ defmodule Mississippi.Consumer.MessageTracker.Server do
 
     case :queue.peek(queue) do
       {:value, ^message} ->
-        @adapter.ack(state.channel, message.meta.delivery_tag)
+        @adapter.ack(state.channel, message.meta.delivery_tag, [])
         new_state = %State{state | queue: :queue.drop(queue)}
         # let's move on to the next message
         {:reply, :ok, new_state, {:continue, :process_next_message}}
@@ -76,7 +76,7 @@ defmodule Mississippi.Consumer.MessageTracker.Server do
 
     case :queue.peek(queue) do
       {:value, ^message} ->
-        @adapter.reject(state.channel, delivery_tag_from_message(message))
+        @adapter.reject(state.channel, delivery_tag_from_message(message), [])
         new_state = %State{state | queue: :queue.drop(queue)}
         # let's move on to the next message
         {:reply, :ok, new_state, {:continue, :process_next_message}}
@@ -147,25 +147,12 @@ defmodule Mississippi.Consumer.MessageTracker.Server do
       %{queue: queue, sharding_key: sharding_key} = state
       {:value, message} = :queue.peek(queue)
       # ... and tell the DU process to handle it
-      {:ok, data_updater_pid} = DataUpdater.get_data_updater_process(sharding_key)
-      new_state = maybe_update_and_monitor_dup_pid(state, data_updater_pid)
-      DataUpdater.handle_message(data_updater_pid, message)
+      new_state = Effects.handle_message_to_data_updater!(message, sharding_key, state)
       {:noreply, new_state, @message_tracker_deactivation_interval_ms}
     end
   end
 
   defp delivery_tag_from_message(%Message{} = message) do
     message.meta.delivery_tag
-  end
-
-  defp maybe_update_and_monitor_dup_pid(state, new_dup_pid) do
-    %State{data_updater_pid: old_data_updater_pid} = state
-
-    if old_data_updater_pid == new_dup_pid do
-      state
-    else
-      Process.monitor(new_dup_pid)
-      %State{state | data_updater_pid: new_dup_pid}
-    end
   end
 end

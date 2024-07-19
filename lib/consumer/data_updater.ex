@@ -7,10 +7,15 @@ defmodule Mississippi.Consumer.DataUpdater do
   MessageTracker process that takes care of maitaining the order of messages.
   """
 
-  alias Mississippi.Consumer.DataUpdater
+  use GenServer, restart: :transient
+
+  alias Mississippi.Consumer.DataUpdater.Effects
+  alias Mississippi.Consumer.DataUpdater.State
   alias Mississippi.Consumer.Message
   require Logger
-  use Efx
+
+  # TODO make this configurable? (Same as MessageTracker)
+  @data_updater_deactivation_interval_ms :timer.hours(3)
 
   @doc """
   Handle a message using the `message_handler` provided in the Mississippi config
@@ -18,7 +23,7 @@ defmodule Mississippi.Consumer.DataUpdater do
   You can get the DataUpdater instance for a given sharding_key using `get_data_updater_process/1`.
   """
   @spec handle_message(pid(), Message.t()) :: :ok
-  defeffect handle_message(data_updater_pid, %Message{} = message) do
+  def handle_message(data_updater_pid, %Message{} = message) do
     GenServer.cast(data_updater_pid, {:handle_message, message})
   end
 
@@ -28,7 +33,7 @@ defmodule Mississippi.Consumer.DataUpdater do
   You can get the DataUpdater instance for a given sharding_key using `get_data_updater_process/1`.
   """
   @spec handle_signal(pid(), term()) :: term()
-  defeffect handle_signal(data_updater_pid, signal) do
+  def handle_signal(data_updater_pid, signal) do
     GenServer.call(data_updater_pid, {:handle_signal, signal})
   end
 
@@ -38,26 +43,100 @@ defmodule Mississippi.Consumer.DataUpdater do
   """
   @spec get_data_updater_process(sharding_key :: term()) ::
           {:ok, pid()} | {:error, :data_updater_start_fail}
-  defeffect get_data_updater_process(sharding_key) do
+  def get_data_updater_process(sharding_key) do
     # TODO bring back :offload_start (?)
-    case DataUpdater.Supervisor.start_child({DataUpdater.Server, sharding_key: sharding_key}) do
-      {:ok, pid} ->
-        {:ok, pid}
+    Effects.get_data_updater_process(sharding_key)
+  end
 
-      {:ok, pid, _info} ->
-        {:ok, pid}
+  def start_link(extra_args, start_args) do
+    {:message_handler, message_handler} = extra_args
+    sharding_key = Keyword.fetch!(start_args, :sharding_key)
 
-      {:error, {:already_started, pid}} ->
-        {:ok, pid}
+    init_args = [
+      sharding_key: sharding_key,
+      message_handler: message_handler
+    ]
 
-      other ->
+    name = {:via, Registry, {Registry.DataUpdater, {:sharding_key, sharding_key}}}
+    GenServer.start_link(__MODULE__, init_args, name: name)
+  end
+
+  @impl true
+  def init(init_arg) do
+    sharding_key = Keyword.fetch!(init_arg, :sharding_key)
+    message_handler = Keyword.fetch!(init_arg, :message_handler)
+
+    with {:ok, handler_state} <- message_handler.init(sharding_key) do
+      state = %State{
+        sharding_key: sharding_key,
+        message_handler: message_handler,
+        handler_state: handler_state
+      }
+
+      {:ok, state, @data_updater_deactivation_interval_ms}
+    end
+  end
+
+  @impl true
+  def handle_call({:handle_signal, signal}, _from, state) do
+    {return_value, new_handler_state} =
+      state.message_handler.handle_signal(signal, state.handler_state)
+
+    new_state = %State{state | handler_state: new_handler_state}
+
+    {:reply, return_value, new_state, @data_updater_deactivation_interval_ms}
+  end
+
+  @impl true
+  def handle_cast({:handle_message, %Message{} = message}, state) do
+    %Message{payload: payload, headers: headers, timestamp: timestamp, meta: meta} = message
+
+    case state.message_handler.handle_message(
+           payload,
+           headers,
+           meta.message_id,
+           timestamp,
+           state.handler_state
+         ) do
+      {:ok, _, new_handler_state} ->
+        _ = Logger.debug("Successfully handled message #{inspect(meta.message_id)}")
+        Effects.ack_message!(message, state.sharding_key)
+
+        new_state = %State{state | handler_state: new_handler_state}
+
+        {:noreply, new_state, @data_updater_deactivation_interval_ms}
+
+      {:error, reason, _state} ->
         _ =
           Logger.warning(
-            "Could not start DataUpdater process for sharding_key #{inspect(sharding_key)}: #{inspect(other)}",
-            tag: "data_updater_start_fail"
+            "Error handling message #{inspect(meta.message_id)}, reason #{inspect(reason)}"
           )
 
-        {:error, :data_updater_start_fail}
+        Effects.reject_message!(message, state.sharding_key)
+
+        {:noreply, state, @data_updater_deactivation_interval_ms}
     end
+  end
+
+  @impl true
+  def handle_info({:DOWN, _, :process, _pid, :shutdown}, state) do
+    {:stop, :shutdown, state}
+  end
+
+  @impl true
+  def handle_info({:DOWN, _, :process, _pid, _reason}, state) do
+    {:stop, :monitored_process_died, state}
+  end
+
+  @impl true
+  def handle_info(:timeout, state) do
+    {:stop, :normal, state}
+  end
+
+  @impl true
+  def terminate(reason, state) do
+    %State{message_handler: message_handler, handler_state: handler_state} = state
+    message_handler.terminate(reason, handler_state)
+    :ok
   end
 end

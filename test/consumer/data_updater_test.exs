@@ -80,7 +80,7 @@ defmodule Mississippi.Consumer.DataUpdater.Test do
       [
         payload: "payload_#{System.unique_integer()}",
         headers: %{},
-        timestamp: DateTime.utc_now(),
+        timestamp: DateTime.utc_now() |> DateTime.to_unix(),
         meta: %{
           message_id: System.unique_integer()
         }
