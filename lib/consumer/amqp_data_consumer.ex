@@ -8,6 +8,7 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
   use GenServer
 
   alias AMQP.Channel
+  alias Mississippi.Consumer.AMQPDataConsumer.Effects
   alias Mississippi.Consumer.AMQPDataConsumer.State
   alias Mississippi.Consumer.Message
   alias Mississippi.Consumer.MessageTracker
@@ -90,7 +91,7 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     case message.headers do
       %{@sharding_key => sharding_key_binary} ->
         sharding_key = :erlang.binary_to_term(sharding_key_binary)
-        {:ok, mt_pid} = MessageTracker.get_message_tracker(sharding_key)
+        {:ok, mt_pid} = Effects.get_message_tracker(sharding_key)
 
         new_monitors = maybe_update_monitors(mt_pid, monitors)
 
@@ -124,7 +125,7 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
   end
 
   defp init_consume(state) do
-    conn = ExRabbitPool.get_connection_worker(:events_consumer_pool)
+    conn = Effects.get_connection_worker(:events_consumer_pool)
 
     case ExRabbitPool.checkout_channel(conn) do
       {:ok, channel} ->
@@ -187,5 +188,66 @@ defmodule Mississippi.Consumer.AMQPDataConsumer do
     Enum.reduce(headers, %{}, fn {key, _type, value}, acc ->
       Map.put(acc, key, value)
     end)
+  end
+end
+
+defmodule Mississippi.Consumer.AMQPDataConsumer.Effects do
+  use Efx
+
+  alias Mississippi.Consumer.MessageTracker
+
+  @doc false
+  @spec get_message_tracker(term()) :: {:ok, pid()}
+  defeffect get_message_tracker(sharding_key) do
+    MessageTracker.get_message_tracker(sharding_key)
+  end
+
+  @doc false
+  # returns an exrabbitpool conn
+  @spec get_connection_worker(atom()) :: term()
+  defeffect get_connection_worker(pool_name) do
+    ExRabbitPool.get_connection_worker(:events_consumer_pool)
+  end
+
+  @doc false
+  @spec checkout_channel(term()) ::
+          {:ok, channel :: AMQP.Channel.t()} | {:error, reason :: term()}
+  defeffect checkout_channel(conn) do
+    ExRabbitPool.checkout_channel(conn)
+  end
+
+  @doc false
+  @spec checkin_channel(conn :: term(), channel :: AMQP.Channel.t()) :: :ok
+  defeffect checkin_channel(conn, channel) do
+    ExRabbitPool.checkin_channel(conn, channel)
+  end
+
+  defp try_to_setup_consume(channel, conn, state) do
+    %Channel{pid: channel_pid} = channel
+    %State{queue_name: queue_name} = state
+
+    with :ok <- @adapter.qos(channel, prefetch_count: @consumer_prefetch_count),
+         {:ok, _queue} <- @adapter.declare_queue(channel, queue_name, durable: true),
+         {:ok, _consumer_tag} <- @adapter.consume(channel, queue_name, self()) do
+      Process.link(channel_pid)
+
+      _ =
+        Logger.debug("AMQPDataConsumer for queue #{queue_name} initialized",
+          tag: "data_consumer_init_ok"
+        )
+
+      {:noreply, %State{state | channel: channel}}
+    else
+      {:error, reason} ->
+        Logger.warning(
+          "Error initializing AMQPDataConsumer on queue #{state.queue_name}: #{inspect(reason)}",
+          tag: "data_consumer_init_err"
+        )
+
+        # Something went wrong, let's put the channel back where it belongs
+        _ = ExRabbitPool.checkin_channel(conn, channel)
+        schedule_connect()
+        {:noreply, %{state | channel: nil}}
+    end
   end
 end
