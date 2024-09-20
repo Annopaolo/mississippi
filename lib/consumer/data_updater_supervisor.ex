@@ -7,7 +7,10 @@ defmodule Mississippi.Consumer.DataUpdater.Supervisor do
   require Logger
 
   def start_link(init_args) do
-    DynamicSupervisor.start_link(__MODULE__, init_args, name: __MODULE__)
+    DynamicSupervisor.start_link(__MODULE__, init_args,
+      name: __MODULE__,
+      distribution_strategy: UniformQuorumDistribution
+    )
   end
 
   @impl true
