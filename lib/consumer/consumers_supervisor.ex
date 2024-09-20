@@ -28,8 +28,15 @@ defmodule Mississippi.Consumer.ConsumersSupervisor do
       {Registry, [keys: :unique, name: MessageTracker.Registry, members: :auto]},
       {Registry, [keys: :unique, name: AMQPDataConsumer.Registry, members: :auto]},
       {DataUpdater.Supervisor, message_handler: message_handler},
-      {DynamicSupervisor, strategy: :one_for_one, name: MessageTracker.Supervisor, members: :auto},
-      {AMQPDataConsumer.Supervisor, queues_config: queues_config}
+      {DynamicSupervisor,
+       strategy: :one_for_one,
+       name: MessageTracker.Supervisor,
+       members: :auto,
+       process_redistribution: :active,
+       distribution_strategy: Horde.UniformQuorumDistribution},
+      {AMQPDataConsumer.Supervisor, queues_config: queues_config},
+      NodeListener,
+      {Task, fn -> AMQPDataConsumer.Supervisor.start_consumers(queues_config) end}
     ]
 
     opts = [strategy: :rest_for_one]
@@ -37,7 +44,20 @@ defmodule Mississippi.Consumer.ConsumersSupervisor do
     Supervisor.init(children, opts)
   end
 
+  # TODO find out a suitable set of topologies
   defp cluster_topologies do
+    # [
+    #   gossip: [
+    #     strategy: Cluster.Strategy.Gossip,
+    #     debug: true,
+    #     config: [
+    #       port: 45_892,
+    #       if_addr: "0.0.0.0",
+    #       multicast_addr: "255.255.255.255",
+    #       broadcast_only: true
+    #     ]
+    #   ]
+    # ]
     []
   end
 
@@ -68,16 +88,16 @@ defmodule Mississippi.Consumer.ConsumersSupervisor do
               ],
               range_start: [
                 type: :non_neg_integer,
-                default: 0,
                 doc: """
                 The start index of the range of queues that this Mississippi consumer instance will handle.
+                This option is deprecated and will be ignored.
                 """
               ],
               range_end: [
                 type: :non_neg_integer,
-                default: 127,
                 doc: """
                 The end index of the range of queues that this Mississippi consumer instance will handle.
+                This option is deprecated and will be ignored.
                 """
               ],
               prefix: [
