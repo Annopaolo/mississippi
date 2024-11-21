@@ -39,6 +39,14 @@ defmodule Mississippi.Consumer.Options do
             """
           ]
         ]
+      ],
+      cluster_topologies: [
+        type: :keyword_list,
+        doc: """
+        The libcluster topologies to use for forming an Erlang cluster.
+        See https://hexdocs.pm/libcluster/readme.html#clustering.
+        """,
+        default: []
       ]
     ] ++
       ConsumersSupervisor.init_opts()
