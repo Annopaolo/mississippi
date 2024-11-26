@@ -36,8 +36,10 @@ defmodule Mississippi.Consumer.ConsumersSupervisor do
        members: :auto,
        process_redistribution: :active,
        distribution_strategy: Horde.UniformQuorumDistribution},
-      {AMQPDataConsumer.Supervisor, queues_config: queues_config},
-      NodeListener,
+      AMQPDataConsumer.Supervisor,
+      # This will make queues start after re-sharding in a multi-node cluster
+      {NodeListener, queues_config},
+      # This will make queues start in a single-node cluster
       {Task, fn -> AMQPDataConsumer.Supervisor.start_consumers(queues_config) end}
     ]
 

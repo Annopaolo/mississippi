@@ -25,7 +25,8 @@ defmodule Mississippi.Consumer.AMQPDataConsumer.Supervisor do
     children = amqp_data_consumers_childspecs(queues_config)
 
     Enum.each(children, fn child ->
-      DynamicSupervisor.start_child(Mississippi.Consumer.AMQPDataConsumer.Supervisor, child)
+      res = DynamicSupervisor.start_child(Mississippi.Consumer.AMQPDataConsumer.Supervisor, child)
+      # IO.puts("Started #{inspect(child)} with result #{inspect(res)}")
     end)
   end
 
