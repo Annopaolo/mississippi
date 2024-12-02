@@ -58,7 +58,7 @@ defmodule Mississippi.Consumer do
       name: {:local, :events_consumer_pool},
       worker_module: ExRabbitPool.Worker.RabbitConnection,
       size: connection_number,
-      max_overflow: 0
+      max_overflow: connection_number
     ]
   end
 end
