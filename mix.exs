@@ -37,7 +37,6 @@ defmodule Mississippi.MixProject do
       {:ex_rabbit_pool, github: "leductam/ex_rabbit_pool"},
       {:hammox, "~> 0.7", only: :test},
       {:mix_audit, "~> 2.0", only: [:dev], runtime: false},
-      {:libcluster, "~> 3.3"},
       {:horde, github: "derekkraan/horde"},
       {:nimble_options, "~> 1.0"},
       {:pretty_log, "~> 0.1"},

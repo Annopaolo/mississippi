@@ -22,10 +22,10 @@ defmodule Mississippi.Consumer.ConsumersSupervisor do
 
     queues_config = init_arg[:queues]
 
-    cluster_topologies = init_arg[:cluster_topologies]
+    #cluster_topologies = init_arg[:cluster_topologies]
 
     children = [
-      {Cluster.Supervisor, [cluster_topologies, [name: Mississippi.Consumer.ClusterSupervisor]]},
+      #{Cluster.Supervisor, [cluster_topologies, [name: Mississippi.Consumer.ClusterSupervisor]]},
       {Registry, [keys: :unique, name: DataUpdater.Registry, members: :auto]},
       {Registry, [keys: :unique, name: MessageTracker.Registry, members: :auto]},
       {Registry, [keys: :unique, name: AMQPDataConsumer.Registry, members: :auto]},
