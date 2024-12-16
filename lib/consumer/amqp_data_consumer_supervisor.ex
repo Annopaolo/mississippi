@@ -8,6 +8,8 @@ defmodule Mississippi.Consumer.AMQPDataConsumer.Supervisor do
   alias Horde.DynamicSupervisor
   alias Mississippi.Consumer.AMQPDataConsumer
 
+  require Logger
+
   def start_link(init_arg) do
     DynamicSupervisor.start_link(__MODULE__, init_arg,
       name: __MODULE__,
@@ -25,6 +27,29 @@ defmodule Mississippi.Consumer.AMQPDataConsumer.Supervisor do
   end
 
   def start_consumers(queues_config) do
+    start_consumers(queues_config, 10)
+  end
+
+  defp start_consumers(_, 0) do
+    _ = Logger.warning("Cannot start AMQPDataConsumers")
+    {:error, :cannot_start_consumers}
+  end
+
+  defp start_consumers(queues_config, retry) do
+    queue_total = queues_config[:total_count]
+
+    case DynamicSupervisor.which_children(__MODULE__) do
+      ^queue_total ->
+        :ok
+
+      _ ->
+        start_children(queues_config)
+        Process.sleep(:timer.seconds(2))
+        start_consumers(queues_config, retry - 1)
+    end
+  end
+
+  defp start_children(queues_config) do
     children = amqp_data_consumers_childspecs(queues_config)
 
     Enum.each(children, fn child ->
