@@ -37,8 +37,9 @@ defmodule Mississippi.Consumer.AMQPDataConsumer.Supervisor do
 
   defp start_consumers(queues_config, retry) do
     queue_total = queues_config[:total_count]
+    children_count = __MODULE__ |> DynamicSupervisor.which_children() |> Enum.count()
 
-    case DynamicSupervisor.which_children(__MODULE__) do
+    case children_count do
       ^queue_total ->
         :ok
 

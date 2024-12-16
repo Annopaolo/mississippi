@@ -40,7 +40,7 @@ defmodule Mississippi.Consumer.ConsumersSupervisor do
       # This will make queues start after re-sharding in a multi-node cluster
       {NodeListener, queues_config},
       # This will make queues start in a single-node cluster
-      {Task, fn -> AMQPDataConsumer.Supervisor.start_consumers(queues_config) end}
+      {AMQPDataConsumer.Starter, queues_config}
     ]
 
     opts = [strategy: :rest_for_one]
